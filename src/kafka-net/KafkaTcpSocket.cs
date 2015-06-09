@@ -57,9 +57,8 @@ namespace KafkaNet
             _sendTaskQueue = new AsyncCollection<SocketPayloadSendTask>();
             _readTaskQueue = new AsyncCollection<SocketPayloadReadTask>();
 
-            //dedicate a long running task to the read/write operations
-            _socketTask = Task.Factory.StartNew(DedicatedSocketTask, CancellationToken.None,
-                TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            // starts read/write operations
+            DedicatedSocketTask();
 
             _disposeRegistration = _disposeToken.Token.Register(() =>
             {
@@ -133,7 +132,7 @@ namespace KafkaNet
             return readTask.Tcp.Task;
         }
 
-        private void DedicatedSocketTask()
+        private async void DedicatedSocketTask()
         {
             while (_disposeToken.IsCancellationRequested == false)
             {
@@ -142,7 +141,7 @@ namespace KafkaNet
                     //block here until we can get connections then start loop pushing data through network stream
                     var netStream = GetStreamAsync().Result;
 
-                    ProcessNetworkstreamTasks(netStream);
+                    await ProcessNetworkstreamTasks(netStream);
                 }
                 catch (Exception ex)
                 {
@@ -167,7 +166,7 @@ namespace KafkaNet
             }
         }
 
-        private void ProcessNetworkstreamTasks(NetworkStream netStream)
+        private async Task ProcessNetworkstreamTasks(NetworkStream netStream)
         {
             Task writeTask = Task.FromResult(true);
             Task readTask = Task.FromResult(true);
@@ -182,7 +181,7 @@ namespace KafkaNet
                 Task sendDataReady = Task.WhenAll(writeTask, _sendTaskQueue.OnHasDataAvailable(_disposeToken.Token));
                 Task readDataReady = Task.WhenAll(readTask, _readTaskQueue.OnHasDataAvailable(_disposeToken.Token));
 
-                Task.WaitAny(sendDataReady, readDataReady);
+                await Task.WhenAny(sendDataReady, readDataReady);
 
                 var exception = new[] { writeTask, readTask }
                     .Where(x => x.IsFaulted && x.Exception != null)
@@ -359,14 +358,6 @@ namespace KafkaNet
         {
             if (Interlocked.Increment(ref _disposeCount) != 1) return;
             if (_disposeToken != null) _disposeToken.Cancel();
-
-            using (_disposeToken)
-            using (_disposeRegistration)
-            using (_client)
-            using (_socketTask)
-            {
-                _socketTask.SafeWait(TimeSpan.FromSeconds(30));
-            }
         }
     }
 
